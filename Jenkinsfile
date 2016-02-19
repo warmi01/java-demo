@@ -10,17 +10,17 @@ node {
     {
         try
         {
-            def version = docker.script.readFile('demo/repo/version.txt').trim() 
+            def version = docker.script.readFile('src/version.txt').trim() 
             def imagetag = "${version}.${env.BUILD_ID}"
     
             // Run the build and unit tests inside a maven container
             stage 'build java artifacts'
-            buildWithMavenContainer('demo/repo/javademo', imagetag)
+            buildWithMavenContainer('src/javademo', imagetag)
             
             // Build the Docker images for the app and integration test
             // from the artifacts built in the workspace
             stage 'build docker images'
-            buildDockerImages('demo/repo/javademo', images, imagetag)
+            buildDockerImages('src/javademo', images, imagetag)
             
             // Start Docker app/test containers for integration testing
             stage 'run integration tests'
