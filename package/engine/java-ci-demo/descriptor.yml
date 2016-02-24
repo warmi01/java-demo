@@ -4,5 +4,5 @@
 
 
 name: java-ci-demo
-version: 1.0.0.001
+version: @build.number@
 display_name: "JAVA CI Demo"
