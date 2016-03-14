@@ -1,7 +1,24 @@
 node {
+    // Run the pipeline job
+     
+    sendBuildEvent("JOB_STARTED", null)
+    try
+    {  
+         runPipeline()         
+         sendBuildEvent("JOB_ENDED", "SUCCESS")
+    }
+    catch (all)
+    {
+         sendBuildEvent("JOB_ENDED", "FAILURE")
+         error 'Pipeline job failed'
+    }
+}
+
+def runPipeline()
+{
     
-     def images = ['app': null, 'app_tests': null]
-     def containers = ['app': null, 'app_tests': null]
+    def images = ['app': null, 'app_tests': null]
+    def containers = ['app': null, 'app_tests': null]
 
     // Pull down the git repo with the source
     checkout scm
@@ -10,21 +27,15 @@ node {
     {
         try
         {
-            def version = docker.script.readFile('src/version.txt').trim() 
-            def imagetag = "${version}.${env.BUILD_ID}"
+            def imagetag = "${env.BUILD_ID}"
     
-            // Run the build and unit tests inside a maven container
-            stage 'build java artifacts'
-            buildWithMavenContainer('src/javademo', imagetag)
-            
-            // Build the Docker images for the app and integration test
-            // from the artifacts built in the workspace
-            stage 'build docker images'
-            buildDockerImages('src/javademo', images, imagetag)
+            // Run the build
+            stage 'run build'
+            runBuild('src/javademo', images, imagetag)
             
             // Start Docker app/test containers for integration testing
             stage 'run integration tests'
-            runIntegrationTests(containers, images, imagetag)        
+            runIntegrationTests(images, imagetag, containers)        
     
             // Publish the Docker images to a Docker registry
             stage 'push docker images'
@@ -39,6 +50,30 @@ node {
             cleanup(images, containers)
         }    
     }
+}
+
+def runBuild(projectDirectory,  images, imagetag)
+{
+    sendBuildEvent("BUILD_STARTED", null)
+     
+    try
+    {
+        // Run the java build and unit tests inside a maven container
+        stage 'build java artifacts'
+        buildWithMavenContainer(projectDirectory, imagetag)
+        
+        // Build the Docker images for the app and integration test
+        // from the artifacts built in the workspace
+        stage 'build docker images'
+        buildDockerImages(projectDirectory, images, imagetag)
+    
+        sendBuildEvent("BUILD_ENDED", "SUCCESS")
+    }
+    catch (e)
+    {
+        sendBuildEvent("BUILD_ENDED", "FAILURE")
+        throw e
+    }     
 }
 
 // Run maven build that will compile, run unit tests, and create artifact binaries
@@ -95,8 +130,10 @@ def buildDockerImages(projectDirectory, images, imagetag)
     echo '***** Docker builds for images successful'
 }
 
-def runIntegrationTests(containers, images, imagetag)
+def runIntegrationTests(images, imagetag, containers)
 {
+    sendBuildEvent("TEST_STARTED", null)
+    
     echo '***** Integration test stage...Start Docker containers for integration testing'
     try
     {
@@ -122,6 +159,7 @@ def runIntegrationTests(containers, images, imagetag)
         if (testoutput.contains('pass: true'))
         {
             echo '***** Integration test passed.'
+            sendBuildEvent("TEST_ENDED", "SUCCESS")
         }
         else
         {
@@ -130,8 +168,9 @@ def runIntegrationTests(containers, images, imagetag)
     }
     catch (all)
     {
+        sendBuildEvent("TEST_ENDED", "FAILURE")
+        
         // Force build failure.
-        // Don't go any futher after cleanup in finally block
         error 'Integration test stage failed'
     }
 }
@@ -159,17 +198,79 @@ def cleanup(images, containers) {
 
 def publishDockerImages(images, imagetag) {
 
+     sendBuildEvent("PUBLISH_STARTED", null)
+
      try {
-          // temporariy use fully qualified VDR name; shorter ose3vdr1 should be used once devops docker changes made
-          docker.withRegistry('http://ose3vdr1.services.slogvpc4.caplatformdev.com:5000', 'docker-registry-login') {
+          docker.withRegistry(env.CI_IMAGE_REGISTRY_URL, 'docker-registry-login') {
                
                images.app.push(imagetag)
                images.app_tests.push(imagetag)
           }
+          
+          sendBuildEvent("PUBLISH_ENDED", "SUCCESS")
      }
      catch (all) {
+          sendBuildEvent("PUBLISH_ENDED", "FAILURE")
           echo 'Failed to tag/push to VDR image'
           error 'Failed to tag/push to VDR image'
      }
 }
 
+/**
+ * Sends a build event to the build service.
+ * @param type Stage event type
+ * @param result Result for the stage.  Required for ENDED event types
+ */
+def sendBuildEvent(type, result)
+{
+    // Use the Platform Service Registry to communicate with the Build Service.
+ 
+    // Get the event callback URL from the Jenkins job parameter.
+    // Test existence of the parameter by trying to access it.
+    def eventCallbackUrl
+    try
+    {
+        eventCallbackUrl = CI_EVENT_CALLBACK.trim()
+        if (eventCallbackUrl == "")
+        {
+            throw new Exception()
+        }
+    }
+    catch (all)
+    {
+        echo 'Not sending build event since callback URL is not set'
+        return    
+    }
+    
+    // Create the URL for the Build Service Event REST API
+    def serviceRegistry = env.SERVICE_REGISTRY_HOSTNAME
+    def buildServiceServiceRegistryPath =
+        (env.BUILD_SERVICE_SR_PATH || env.BUILD_SERVICE_SR_PATH == "" ?
+            env.BUILD_SERVICE_SR_PATH : "/default/ci/buildservice")
+    
+    def buildServiceUrl = "http://" + serviceRegistry + buildServiceServiceRegistryPath
+    def buildServiceApiPath = "/jobs/${env.JOB_NAME}/builds/${env.BUILD_ID}/events" 
+    def buildServiceEventUrl = buildServiceUrl + buildServiceApiPath
+    
+    def jsonEventPayload =
+        "{ " +
+            "\"event\": {" + 
+                "\"type\": \"${type}\", " +
+                "\"callback\": \"${eventCallbackUrl}\"" +
+                (result ? ", \"result\": \"${result}\"" : "") +
+            " } " +
+        "}"
+       
+    // Send event payload to build service.
+    // Don't fail the job if the event can't be sent 
+    try
+    {
+        sh "curl -sS -X POST -H \"Content-Type: application/json\" -d '" +
+            jsonEventPayload + "' " +  buildServiceEventUrl
+        echo 'Sent build event "' + type + '" to Build Service URL: ' + buildServiceEventUrl         
+    }
+    catch (all)
+    {
+        echo 'Failed to send build event "' + type + '" to Build Service URL: ' + buildServiceEventUrl
+    }
+}
