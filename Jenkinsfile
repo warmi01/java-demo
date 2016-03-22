@@ -14,11 +14,21 @@ node {
     }
 }
 
+def getRootPath() {
+	def path = CI_ROOT_PATH.trim()
+	if (path != "") 
+	{
+		path = path + '/'
+	}
+	return path
+}
+
 def runPipeline()
 {
     
     def images = ['app': null, 'app_tests': null]
     def containers = ['app': null, 'app_tests': null]
+    def root = getRootPath()
 
     // Pull down the git repo with the source
     checkout scm
@@ -31,7 +41,7 @@ def runPipeline()
     
             // Run the build
             stage 'run build'
-            runBuild('src/javademo', images, imagetag)
+            runBuild("{$root}javademo", images, imagetag)
             
             // Start Docker app/test containers for integration testing
             stage 'run integration tests'
