@@ -15,12 +15,22 @@ node {
 }
 
 def getRootPath() {
-	def path = CI_ROOT_PATH.trim()
-	if (path != "") 
-	{
-		path = path + '/'
-	}
-	return path
+     def path = ''
+     
+     try {
+          path = CI_ROOT_PATH.trim()
+          if (path != '') 
+          {
+          	path = path + '/'
+          }
+     }
+     catch (all) {
+          echo 'CI_ROOT_PATH is not set; using default'
+     }
+
+     echo "CI_ROOT_PATH set to '${path}'" 
+
+     return path
 }
 
 def runPipeline()
@@ -41,7 +51,7 @@ def runPipeline()
     
             // Run the build
             stage 'run build'
-            runBuild("${root}javademo", images, imagetag)
+            runBuild("${root}/src/javademo", images, imagetag)
             
             // Start Docker app/test containers for integration testing
             stage 'run integration tests'
