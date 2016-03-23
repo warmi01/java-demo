@@ -41,7 +41,7 @@ def runPipeline()
     
             // Run the build
             stage 'run build'
-            runBuild("{$root}javademo", images, imagetag)
+            runBuild("${root}javademo", images, imagetag)
             
             // Start Docker app/test containers for integration testing
             stage 'run integration tests'
